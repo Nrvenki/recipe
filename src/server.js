@@ -2,8 +2,8 @@ import express from "express";
 import cors from "cors";
 import { ENV } from "./config/env.js";
 import { db } from "./config/db.js";
-import { favoritesTable } from "./db/schema.js";
-import { and, eq } from "drizzle-orm";
+import { favoritesTable, usersTable } from "./db/schema.js";
+import { and, eq, desc, count } from "drizzle-orm";
 import job from "./config/cron.js";
 
 const app = express();
@@ -117,6 +117,89 @@ app.delete("/api/favorites/:userId/:recipeId", async (req, res) => {
     res.status(200).json({ message: "Favorite removed successfully" });
   } catch (error) {
     console.log("Error removing a favorite", error);
+    res.status(500).json({ error: "Something went wrong" });
+  }
+});
+
+// User registration endpoint
+app.post("/api/users/register", async (req, res) => {
+  try {
+    const { clerkUserId, email, firstName, lastName } = req.body;
+
+    if (!clerkUserId || !email) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    // Check if user already exists
+    const existingUser = await db
+      .select()
+      .from(usersTable)
+      .where(eq(usersTable.clerkUserId, clerkUserId));
+
+    if (existingUser.length > 0) {
+      // Update last sign in time
+      await db
+        .update(usersTable)
+        .set({ lastSignInAt: new Date() })
+        .where(eq(usersTable.clerkUserId, clerkUserId));
+      
+      return res.status(200).json(existingUser[0]);
+    }
+
+    // Create new user
+    const newUser = await db
+      .insert(usersTable)
+      .values({
+        clerkUserId,
+        email,
+        firstName,
+        lastName,
+        lastSignInAt: new Date(),
+      })
+      .returning();
+
+    res.status(201).json(newUser[0]);
+  } catch (error) {
+    console.log("Error registering user", error);
+    res.status(500).json({ error: "Something went wrong" });
+  }
+});
+
+// Get user statistics
+app.get("/api/users/stats/:clerkUserId", async (req, res) => {
+  try {
+    const { clerkUserId } = req.params;
+
+    if (!clerkUserId) {
+      return res.status(400).json({ error: "User ID is required" });
+    }
+
+    // Get total number of users
+    const totalUsersResult = await db
+      .select({ count: count() })
+      .from(usersTable);
+    
+    const totalUsers = totalUsersResult[0]?.count || 0;
+
+    // Get user's registration order
+    const userOrderResult = await db
+      .select({ id: usersTable.id })
+      .from(usersTable)
+      .where(eq(usersTable.clerkUserId, clerkUserId));
+
+    if (userOrderResult.length === 0) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const userOrder = userOrderResult[0].id;
+
+    res.status(200).json({
+      totalUsers,
+      userOrder,
+      registrationNumber: userOrder
+    });
+  } catch (error) {
+    console.log("Error fetching user stats", error);
     res.status(500).json({ error: "Something went wrong" });
   }
 });
